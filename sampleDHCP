@@ -1,0 +1,109 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <net/ethernet.h>
+
+#define DHCP_SERVER_PORT 67
+#define DHCP_CLIENT_PORT 68
+#define DHCP_MAGIC_COOKIE 0x63825363 // DHCP magic cookie
+
+// DHCP Message Types
+#define DHCP_DISCOVER 1
+#define DHCP_OFFER 2
+
+// DHCP Options
+#define DHCP_OPTION_MESSAGE_TYPE 53
+#define DHCP_OPTION_END 255
+
+// DHCP Message Structure
+struct dhcp_packet {
+    uint8_t op;            // Message op code / message type
+    uint8_t htype;         // Hardware address type
+    uint8_t hlen;          // Hardware address length
+    uint8_t hops;          // Client sets to zero
+    uint32_t xid;          // Transaction ID
+    uint16_t secs;         // Seconds elapsed since client began address acquisition
+    uint16_t flags;        // Flags
+    struct in_addr ciaddr; // Client IP address (if already in use)
+    struct in_addr yiaddr; // Your IP address (assigned by server)
+    struct in_addr siaddr; // IP address of the next server to use in bootstrap
+    struct in_addr giaddr; // Relay agent IP address
+    uint8_t chaddr[16];    // Client hardware address
+    uint8_t sname[64];     // Server host name
+    uint8_t file[128];     // Boot file name
+    uint32_t magic;        // Magic cookie
+    uint8_t options[312];  // Optional parameters
+};
+
+void create_dhcp_discover(struct dhcp_packet *packet) {
+    memset(packet, 0, sizeof(struct dhcp_packet));
+    packet->op = DHCP_DISCOVER;
+    packet->htype = 1; // Ethernet
+    packet->hlen = 6;  // MAC length
+    packet->xid = htonl(rand()); // Random transaction ID
+    packet->magic = htonl(DHCP_MAGIC_COOKIE);
+    packet->options[0] = DHCP_OPTION_MESSAGE_TYPE; // Option: DHCP Message Type
+    packet->options[1] = 1; // Length: 1
+    packet->options[2] = 1; // DHCP Discover
+    packet->options[3] = DHCP_OPTION_END; // End option
+}
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr, client_addr;
+    struct dhcp_packet packet;
+    socklen_t addr_len = sizeof(server_addr);
+
+    // Create a UDP socket
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Set up client address
+    memset(&client_addr, 0, sizeof(client_addr));
+    client_addr.sin_family = AF_INET;
+    client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    client_addr.sin_port = htons(DHCP_CLIENT_PORT);
+
+    // Bind the socket to the client address
+    if (bind(sockfd, (struct sockaddr *)&client_addr, sizeof(client_addr)) < 0) {
+        perror("Bind failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Set up server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST); // Broadcast to all
+    server_addr.sin_port = htons(DHCP_SERVER_PORT);
+
+    // Create DHCP Discover packet
+    create_dhcp_discover(&packet);
+
+    // Send DHCP Discover
+    if (sendto(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Send failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Receive DHCP Offer
+    if (recvfrom(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)&server_addr, &addr_len) < 0) {
+        perror("Receive failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Print the offer details (for demonstration)
+    printf("Received DHCP Offer: Your IP: %s\n", inet_ntoa(packet.yiaddr));
+
+    // Close the socket
+    close(sockfd);
+    return 0;
+}
